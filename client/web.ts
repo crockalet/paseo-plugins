@@ -56,14 +56,33 @@ export interface Overlay {
 }
 
 const POSITION_KEY = "codex-pets.position";
+const HOSTS_KEY = "codex-pets.hosts";
 const MARGIN = 8;
+
+export function loadHosts(): { serverId: string; label: string }[] {
+  if (Platform.OS !== "web") return [];
+  try {
+    const saved = JSON.parse(localStorage.getItem(HOSTS_KEY) ?? "[]");
+    return Array.isArray(saved) ? saved.filter((h) => typeof h?.serverId === "string" && typeof h?.label === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveHosts(hosts: { serverId: string; label: string }[]): void {
+  if (Platform.OS !== "web") return;
+  try {
+    localStorage.setItem(HOSTS_KEY, JSON.stringify(hosts));
+  } catch {}
+}
 
 function loadOffset(): { right: number; bottom: number } {
   try {
     const saved = JSON.parse(localStorage.getItem(POSITION_KEY) ?? "null");
     if (typeof saved?.right === "number" && typeof saved?.bottom === "number") return saved;
   } catch {}
-  return { right: 24, bottom: 72 };
+  // Above the composer, so the pet never sits on the send button.
+  return { right: 24, bottom: 180 };
 }
 
 function saveOffset(offset: { right: number; bottom: number }): void {

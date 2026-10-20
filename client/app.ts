@@ -1,10 +1,9 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
-import { settingsRpc } from "@getpaseo/plugin";
 import { useSyncExternalStore } from "react";
 import { MOOD_LABEL } from "../shared/mood";
-import { getPet, listPets, petSettings, type PetSettings } from "../shared/pets";
-import { PetController, type PetSnapshot } from "./controller";
-import { mountOverlay, type Overlay } from "./web";
+import { getPet, listPets, petSettings, readSettings, type PetSettings } from "../shared/pets";
+import { type HostInfo, PetController, type PetSnapshot } from "./controller";
+import { loadHosts, mountOverlay, saveHosts, type Overlay } from "./web";
 
 /** The plugin's single live instance: store, desktop overlay and the settings they follow. */
 export class PetApp {
@@ -17,11 +16,20 @@ export class PetApp {
   constructor(private client: PluginClientContext) {
     this.overlay = mountOverlay(() => client.openScreen({ screenId: "pets" }));
     this.unsubscribe = this.controller.subscribe(() => this.render());
+    // Hosts seen last session, so the pet works before (or without) the sidebar mounting.
+    // Assumed online; ones that aren't fail and the controller's retry picks them up later.
+    const saved = loadHosts();
+    if (saved.length) this.controller.setHosts(saved.map((h) => ({ ...h, status: "online" })));
     void this.loadSettings();
   }
 
   get current(): PetSettings {
     return this.settings;
+  }
+
+  setHosts(hosts: readonly HostInfo[]): void {
+    this.controller.setHosts(hosts);
+    saveHosts(hosts.map((h) => ({ serverId: h.serverId, label: h.label })));
   }
 
   async apply(values: PetSettings): Promise<void> {
@@ -48,8 +56,7 @@ export class PetApp {
 
   private async loadSettings(): Promise<void> {
     try {
-      const result = await this.client.rpc(settingsRpc(petSettings.id).read, {});
-      if (result.status === "ready") return this.apply(petSettings.schema.parse(result.values));
+      return await this.apply(await this.client.rpc(readSettings, {}));
     } catch (error) {
       console.warn("[codex-pets] could not read settings", error);
     }

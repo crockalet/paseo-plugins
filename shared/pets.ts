@@ -49,3 +49,10 @@ export const petSettings = defineSettings({
   }),
 });
 export type PetSettings = z.output<typeof petSettings.schema>;
+
+// The overlay starts before any surface mounts, so it reads saved settings through the plugin's own RPC.
+export const readSettings = defineRpc({
+  name: "pets.settings",
+  input: z.object({}),
+  output: petSettings.schema,
+});

@@ -9,7 +9,7 @@ export function usePetSync(): ReturnType<typeof useSettings<typeof petSettings.s
   const settings = useSettings(petSettings);
 
   useEffect(() => {
-    getApp()?.controller.setHosts(hosts);
+    getApp()?.setHosts(hosts);
   }, [hosts]);
 
   const values = settings.status === "ready" ? settings.values : null;
