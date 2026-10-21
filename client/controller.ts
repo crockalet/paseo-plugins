@@ -105,7 +105,7 @@ export class PetController {
     let api: Api;
     try {
       api = getPaseoClient(host.serverId);
-      const result = await api.workspaces.list({ subscribe: {}, page: { limit: 500 } });
+      const result = await api.workspaces.list({ subscribe: {}, page: { limit: 200 } });
       if (this.hosts.get(host.serverId) !== tracked) return void result.subscription.release();
       this.replaceHost(host.serverId, result.entries as RawWorkspace[]);
       const unsubscribe = result.subscription.subscribe({
