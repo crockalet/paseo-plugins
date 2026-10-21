@@ -1,0 +1,9 @@
+{
+  "id": "codex-pets",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.12.0"
+  },
+  "name": "Codex Pets",
+  "description": "Your Codex pets in Paseo: a pet that shows what your agents are doing on every host."
+}
