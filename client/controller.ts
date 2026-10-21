@@ -40,7 +40,19 @@ type RawWorkspace = {
   statusEnteredAt?: string | null;
   archivingAt?: string | null;
 };
+type RawAgent = {
+  id: string;
+  workspaceId?: string | null;
+  parentAgentId?: string | null;
+  labels?: Readonly<Record<string, string>> | null;
+};
 type Tracked = { label: string; release: () => void };
+
+const PARENT_LABEL = "paseo.parent-agent-id";
+
+function isWorker(agent: RawAgent): boolean {
+  return Boolean(agent.parentAgentId?.trim() || agent.labels?.[PARENT_LABEL]?.trim());
+}
 
 const RETRY_MS = 15_000;
 
@@ -49,6 +61,8 @@ export class PetController {
   private hosts = new Map<string, Tracked>();
   private wanted: HostInfo[] = [];
   private workspaces = new Map<string, WorkspaceEntry>();
+  /** `${serverId}\0${agentId}` → the agent's workspace key and whether another agent started it. */
+  private agents = new Map<string, { workspace: string; worker: boolean }>();
   private sprite: LoadedSprite | null = null;
   private listeners = new Set<() => void>();
   private snapshot: PetSnapshot = { mood: "idle", attention: [], running: 0, sprite: null };
@@ -119,8 +133,10 @@ export class PetController {
         // A connection switch releases the borrowed API; drop the host and let the retry timer resubscribe.
         error: () => this.stop(host.serverId),
       });
+      const releaseAgents = await this.watchAgents(api, host.serverId, tracked);
       tracked.release = () => {
         unsubscribe();
+        releaseAgents();
         void result.subscription.release().catch(() => {});
       };
     } catch (error) {
@@ -129,17 +145,66 @@ export class PetController {
     }
   }
 
+  private async watchAgents(api: Api, serverId: string, tracked: Tracked): Promise<() => void> {
+    const result = await api.agents.list({ subscribe: {} });
+    if (this.hosts.get(serverId) !== tracked) {
+      void result.subscription.release().catch(() => {});
+      return () => {};
+    }
+    const replace = (entries: readonly { agent: RawAgent }[]) => {
+      this.dropKeys(this.agents, serverId);
+      for (const { agent } of entries) this.putAgent(serverId, agent);
+      this.publish();
+    };
+    replace(result.entries as { agent: RawAgent }[]);
+    const unsubscribe = result.subscription.subscribe({
+      snapshot: (snap) => replace(snap.entries as { agent: RawAgent }[]),
+      update: (message) => {
+        if (message.type !== "agent_update") return;
+        const payload = message.payload as { kind: string; agent?: RawAgent; agentId?: string };
+        if (payload.kind === "upsert" && payload.agent) this.putAgent(serverId, payload.agent);
+        else if (payload.agentId) this.agents.delete(`${serverId}\0${payload.agentId}`);
+        this.publish();
+      },
+      error: () => this.stop(serverId),
+    });
+    return () => {
+      unsubscribe();
+      void result.subscription.release().catch(() => {});
+    };
+  }
+
+  private putAgent(serverId: string, agent: RawAgent): void {
+    const key = `${serverId}\0${agent.id}`;
+    if (!agent.workspaceId) return void this.agents.delete(key);
+    this.agents.set(key, { workspace: `${serverId}\0${agent.workspaceId}`, worker: isWorker(agent) });
+  }
+
+  private dropKeys(map: Map<string, unknown>, serverId: string): void {
+    for (const key of [...map.keys()]) if (key.startsWith(`${serverId}\0`)) map.delete(key);
+  }
+
+  /** Workspaces where every agent was started by another agent; their parent handles them. */
+  private workerWorkspaces(): Set<string> {
+    const owned = new Map<string, boolean>();
+    for (const { workspace, worker } of this.agents.values()) {
+      owned.set(workspace, (owned.get(workspace) ?? true) && worker);
+    }
+    return new Set([...owned].filter(([, allWorkers]) => allWorkers).map(([workspace]) => workspace));
+  }
+
   private stop(serverId: string): void {
     const tracked = this.hosts.get(serverId);
     if (!tracked) return;
     this.hosts.delete(serverId);
     tracked.release();
-    for (const key of [...this.workspaces.keys()]) if (key.startsWith(`${serverId}\0`)) this.workspaces.delete(key);
+    this.dropKeys(this.workspaces, serverId);
+    this.dropKeys(this.agents, serverId);
     this.publish();
   }
 
   private replaceHost(serverId: string, entries: RawWorkspace[]): void {
-    for (const key of [...this.workspaces.keys()]) if (key.startsWith(`${serverId}\0`)) this.workspaces.delete(key);
+    this.dropKeys(this.workspaces, serverId);
     for (const ws of entries) this.put(serverId, ws);
     this.publish();
   }
@@ -170,11 +235,13 @@ export class PetController {
 
   private publish(): void {
     const all = [...this.workspaces.values()];
+    const workers = this.workerWorkspaces();
+    const delegated = (w: WorkspaceEntry) => workers.has(`${w.serverId}\0${w.id}`);
     const attention = all
-      .filter((w) => needsYou(moodOf(w.status)))
+      .filter((w) => !delegated(w) && needsYou(moodOf(w.status)))
       .sort((a, b) => (b.since ?? "").localeCompare(a.since ?? ""));
     this.snapshot = {
-      mood: overallMood(all.map((w) => w.status)),
+      mood: overallMood(all.map((w) => (delegated(w) && w.status !== "running" ? "done" : w.status))),
       attention,
       running: all.filter((w) => moodOf(w.status) === "running").length,
       sprite: this.sprite,
