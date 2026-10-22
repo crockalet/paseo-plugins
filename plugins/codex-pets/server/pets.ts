@@ -45,6 +45,7 @@ const manifestSchema = z
         }),
       )
       .optional(),
+    patSays: z.array(z.string().min(1).max(40)).max(20).optional(),
   })
   .loose();
 type Manifest = z.infer<typeof manifestSchema>;
@@ -157,5 +158,6 @@ export async function readPet({ key }: RpcInput<typeof getPet>): Promise<PetSpri
     frame: manifest.frame ?? DEFAULT_FRAME,
     defaultAnimation: manifest.defaultAnimation ?? "idle",
     animations: animationsFor(manifest),
+    patSays: manifest.patSays,
   };
 }

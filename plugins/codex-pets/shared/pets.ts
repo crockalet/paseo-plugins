@@ -23,6 +23,8 @@ export const petSpriteSchema = z.object({
   frame: z.object({ width: z.number().positive(), height: z.number().positive() }),
   defaultAnimation: z.string(),
   animations: z.record(z.string(), animationSchema),
+  /** Lines the pet says while being patted, getting more excited down the list. */
+  patSays: z.array(z.string()).optional(),
 });
 export type PetSprite = z.infer<typeof petSpriteSchema>;
 
@@ -45,7 +47,7 @@ export const petSettings = defineSettings({
   schema: z.object({
     petKey: z.string().default(""),
     overlay: z.boolean().default(true),
-    scale: z.number().min(0.2).max(1).default(0.45),
+    scale: z.number().min(0.2).max(2).default(0.45),
   }),
 });
 export type PetSettings = z.output<typeof petSettings.schema>;
