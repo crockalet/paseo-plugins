@@ -13,6 +13,9 @@ const SIZES = [
   { label: "Small", value: "0.3" },
   { label: "Medium", value: "0.45" },
   { label: "Large", value: "0.6" },
+  { label: "Extra large", value: "0.8" },
+  { label: "Huge", value: "1" },
+  { label: "Giant", value: "1.4" },
 ];
 
 function ago(since: string | null): string {
