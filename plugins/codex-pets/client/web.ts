@@ -78,6 +78,10 @@ export interface Overlay {
 const POSITION_KEY = "codex-pets.position";
 const HOSTS_KEY = "codex-pets.hosts";
 const MARGIN = 8;
+/** Shake meter: pixels dragged, draining at DIZZY_DRAIN px/s; above DIZZY_AT the pet is dizzy until DIZZY_MS after it drops back. */
+const DIZZY_AT = 700;
+const DIZZY_DRAIN = 500;
+const DIZZY_MS = 4000;
 /** Fractions of the frame; used when the sprite can't be read. */
 const DEFAULT_HEAD: Box = { left: 0.2, right: 0.8, top: 0, bottom: 0.35 };
 
@@ -209,7 +213,21 @@ export function mountOverlay(onOpen: () => void): Overlay | null {
   let state: OverlayState | null = null;
   let offset = loadOffset();
   let hovering = false;
-  let drag: { id: number; startX: number; startY: number; lastX: number; moved: boolean; dir: string } | null = null;
+  let drag: {
+    id: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    moved: boolean;
+    dir: string;
+    shake: number;
+    at: number;
+    /** Pointer's distance from the pet's right and bottom edges, so the grabbed spot stays under it. */
+    grab: { right: number; bottom: number };
+  } | null = null;
+  let dizzy: ReturnType<typeof setTimeout> | null = null;
+  let orbit: ReturnType<typeof setInterval> | null = null;
   let pat: { id: number; lastX: number; lastY: number; travel: number } | null = null;
   let patting: ReturnType<typeof setTimeout> | null = null;
   let head = DEFAULT_HEAD;
@@ -235,7 +253,16 @@ export function mountOverlay(onOpen: () => void): Overlay | null {
   const animationName = () => {
     const s = state?.sprite;
     if (!s) return "";
-    const wanted = drag?.moved ? drag.dir : pat || patting ? (s.animations.patting ? "patting" : "waving") : hovering ? "jumping" : state!.mood;
+    const dizzyTurn = drag?.moved ? drag.dir.replace("running", "dizzy") : "";
+    const wanted = dizzy
+      ? s.animations[dizzyTurn] ? dizzyTurn : s.animations.dizzy ? "dizzy" : "failed"
+      : drag?.moved
+        ? drag.dir
+        : pat || patting
+          ? s.animations.patting ? "patting" : "waving"
+          : hovering
+            ? "jumping"
+            : state!.mood;
     return s.animations[wanted] ? wanted : s.animations[s.defaultAnimation] ? s.defaultAnimation : "idle";
   };
 
@@ -377,6 +404,54 @@ export function mountOverlay(onOpen: () => void): Overlay | null {
     pet.style.setProperty("cursor", "grab");
   };
 
+  const stars = [0, 1, 2].map(() => {
+    const el = document.createElement("span");
+    el.textContent = "★";
+    el.style.cssText =
+      "position:fixed;z-index:2147483001;pointer-events:none;display:none;color:#ffd23f;text-shadow:0 0 0 #3a1e10,1px 1px 0 #3a1e10,-1px -1px 0 #3a1e10,1px -1px 0 #3a1e10,-1px 1px 0 #3a1e10;line-height:1;";
+    document.body?.appendChild(el);
+    return el;
+  });
+
+  const stopDizzy = () => {
+    if (dizzy) clearTimeout(dizzy);
+    if (orbit) clearInterval(orbit);
+    dizzy = null;
+    orbit = null;
+    for (const star of stars) star.style.setProperty("display", "none");
+    restart();
+  };
+
+  const startDizzy = () => {
+    const already = dizzy !== null;
+    if (dizzy) clearTimeout(dizzy);
+    dizzy = setTimeout(stopDizzy, DIZZY_MS);
+    // Restarting on every move would skip frames.
+    if (already) return;
+    if (!orbit) {
+      const start = Date.now();
+      orbit = setInterval(() => {
+        const r = pet.getBoundingClientRect();
+        const px = Math.round(14 * grow());
+        const cx = r.left + r.width * ((head.left + head.right) / 2);
+        const cy = r.top + r.height * head.top;
+        const rx = r.width * 0.3;
+        stars.forEach((star, i) => {
+          const a = (Date.now() - start) / 260 + (i * 2 * Math.PI) / stars.length;
+          // Stars passing behind the head shrink and fade, so the ring reads as a circle.
+          const depth = (Math.sin(a) + 1) / 2;
+          star.style.setProperty("font-size", `${px}px`);
+          star.style.setProperty("left", `${cx + Math.cos(a) * rx - px / 2}px`);
+          star.style.setProperty("top", `${cy + Math.sin(a) * rx * 0.3 - px / 2}px`);
+          star.style.setProperty("opacity", String(0.45 + depth * 0.55));
+          star.style.setProperty("transform", `scale(${0.7 + depth * 0.3})`);
+          star.style.setProperty("display", "block");
+        });
+      }, 40);
+    }
+    restart();
+  };
+
   pet.addEventListener("pointerenter", () => {
     hovering = true;
     restart();
@@ -402,10 +477,25 @@ export function mountOverlay(onOpen: () => void): Overlay | null {
       }, 400);
       if (patting) clearTimeout(patting);
       patting = null;
+      if (dizzy) stopDizzy();
       restart();
       return;
     }
-    drag = { id: e.pointerId, startX: e.clientX, startY: e.clientY, lastX: e.clientX, moved: false, dir: "running-right" };
+    drag = {
+      id: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      moved: false,
+      dir: "running-right",
+      shake: 0,
+      at: Date.now(),
+      grab: (() => {
+        const r = pet.getBoundingClientRect();
+        return { right: r.left + r.width - e.clientX, bottom: r.top + r.height - e.clientY };
+      })(),
+    };
     pet.setPointerCapture?.(e.pointerId);
     pet.style.setProperty("cursor", "grabbing");
   });
@@ -432,9 +522,13 @@ export function mountOverlay(onOpen: () => void): Overlay | null {
     drag.moved = true;
     const dx = e.clientX - drag.lastX;
     if (Math.abs(dx) >= 2) drag.dir = dx > 0 ? "running-right" : "running-left";
+    const now = Date.now();
+    drag.shake = Math.max(0, drag.shake - ((now - drag.at) / 1000) * DIZZY_DRAIN) + Math.hypot(dx, e.clientY - drag.lastY);
+    drag.at = now;
     drag.lastX = e.clientX;
-    const { w, h } = size();
-    offset = { right: window.innerWidth - e.clientX - w / 2, bottom: window.innerHeight - e.clientY - h / 2 };
+    drag.lastY = e.clientY;
+    if (drag.shake >= DIZZY_AT) startDizzy();
+    offset = { right: window.innerWidth - e.clientX - drag.grab.right, bottom: window.innerHeight - e.clientY - drag.grab.bottom };
     place();
     if (current !== animationName()) restart();
   });
@@ -516,6 +610,9 @@ export function mountOverlay(onOpen: () => void): Overlay | null {
       if (patting) clearTimeout(patting);
       if (handTimer) clearInterval(handTimer);
       if (patBeat) clearInterval(patBeat);
+      if (dizzy) clearTimeout(dizzy);
+      if (orbit) clearInterval(orbit);
+      for (const star of stars) star.remove();
       hand.remove();
       bubble.remove();
       document.removeEventListener("visibilitychange", onVisibility);
