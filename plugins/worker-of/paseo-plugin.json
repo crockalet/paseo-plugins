@@ -1,9 +1,0 @@
-{
-  "id": "worker-of",
-  "name": "Worker of",
-  "description": "Marks agents that another agent started with a \"Worker of <parent>\" pill that opens the parent.",
-  "media": [],
-  "requirements": {
-    "paseo": ">=0.12.0"
-  }
-}
